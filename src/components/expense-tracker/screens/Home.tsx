@@ -11,9 +11,10 @@ import { computeEffectiveBudget, type EffectiveBudgetRow } from "@/lib/budget/pe
 import { computeSavingsBalance } from "@/lib/budget/savings";
 import { todayIso, daysLeftInPeriod, periodLengthDays, formatDisplayDate, addDays, nextPeriodStart } from "@/lib/budget/dates";
 import type { AppData } from "@/hooks/expense-tracker/useAppData";
-import { Plus, AlertTriangle, PiggyBank, ChevronRight, CalendarClock, History, Download } from "lucide-react";
+import { Plus, AlertTriangle, PiggyBank, ChevronRight, CalendarClock, History, Download, Receipt } from "lucide-react";
 import { daysSinceExport } from "@/lib/budget/persistence";
 import { CategoryExpensesSheet } from "../shared/CategoryExpensesSheet";
+import { AllExpensesSheet } from "../shared/AllExpensesSheet";
 import * as db from "@/lib/db/db";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ export function Home({ data }: HomeProps) {
   const { toast } = useToast();
   const { settings, activePeriod, categories, pendingPeriods, savingsLedger } = data;
   const [inspectCategoryId, setInspectCategoryId] = useState<string | null>(null);
+  const [showAllExpenses, setShowAllExpenses] = useState(false);
 
   const { periodExpenses, periodTransfers, periodAllocations } = useActivePeriodFiltered(activePeriod, data);
 
@@ -114,10 +116,18 @@ export function Home({ data }: HomeProps) {
             </div>
           </div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-lg bg-muted p-2">
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Spent</div>
+            <button
+              type="button"
+              onClick={() => setShowAllExpenses(true)}
+              className="group rounded-lg bg-muted p-2 text-center transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title="View all transactions for this period"
+            >
+              <div className="flex items-center justify-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground group-hover:text-foreground">
+                <span>Spent</span>
+                <Receipt className="h-2.5 w-2.5 opacity-60 group-hover:opacity-100" />
+              </div>
               <div className="text-sm font-semibold"><Money minor={totalSpent} currency={settings.currency} /></div>
-            </div>
+            </button>
             <div className="rounded-lg bg-muted p-2">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</div>
               <div className="text-sm font-semibold"><Money minor={totalEffective} currency={settings.currency} /></div>
@@ -166,7 +176,18 @@ export function Home({ data }: HomeProps) {
 
       <main className="mx-auto w-full max-w-md flex-1 px-4 py-4">
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-xs uppercase tracking-wide text-muted-foreground">Envelopes</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs uppercase tracking-wide text-muted-foreground">Envelopes</h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowAllExpenses(true)}
+              className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <Receipt className="mr-1 h-3 w-3" />
+              Transactions ({periodExpenses.length})
+            </Button>
+          </div>
           <span className="text-xs text-muted-foreground">
             {daysLeft > 0 ? `${daysLeft} days left (${realDays}-day period)` : `Period ended · ${realDays} days`}
           </span>
@@ -212,6 +233,23 @@ export function Home({ data }: HomeProps) {
           } else {
             toast({ title: "Expense deleted" });
           }
+          await data.refresh();
+        }}
+      />
+
+      <AllExpensesSheet
+        open={showAllExpenses}
+        onOpenChange={setShowAllExpenses}
+        expenses={periodExpenses}
+        categories={categories}
+        currency={settings.currency}
+        onQuickAdd={() => {
+          setShowAllExpenses(false);
+          go("quick-add");
+        }}
+        onDeleteExpense={async (id) => {
+          await db.deleteExpense(id);
+          toast({ title: "Expense deleted" });
           await data.refresh();
         }}
       />
