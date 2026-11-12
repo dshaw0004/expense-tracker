@@ -15,7 +15,7 @@ import { todayIso, addDays, type IsoDate, nowTimestamp, uuid } from "@/lib/budge
 import { computeEffectiveBudget, saveTransfer } from "@/lib/budget/period";
 import { computeSavingsBalance, withdrawalsInPeriod, remainingCap } from "@/lib/budget/savings";
 import * as db from "@/lib/db/db";
-import type { Category, Expense, Transfer } from "@/lib/db/schema";
+import type { Expense } from "@/lib/db/schema";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronLeft, Check, Calendar } from "lucide-react";
 
@@ -34,7 +34,6 @@ export function QuickAddExpense({ data }: QuickAddProps) {
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [borrowOpen, setBorrowOpen] = useState(false);
-  const [borrowSource, setBorrowSource] = useState<BorrowSource | null>(null);
   const [borrowAmount, setBorrowAmount] = useState(0);
   const [pendingExpense, setPendingExpense] = useState<Expense | null>(null);
 
@@ -83,29 +82,35 @@ export function QuickAddExpense({ data }: QuickAddProps) {
       return;
     }
     setSaving(true);
-    const now = nowTimestamp();
+
+    // Build the expense object but don't write it yet.
     const exp: Expense = {
       id: uuid(),
       category_id: categoryId,
       amount_minor: amount,
       date,
       note: note.trim() || null,
-      created_at: now,
+      created_at: nowTimestamp(),
     };
-    await db.putExpense(exp);
-    toast({ title: "Saved", description: `${formatMoney(amount, settings!.currency)} to ${categories.find((c) => c.id === categoryId)?.name ?? ""}` });
-    setSaving(false);
 
-    // Compute the resulting remaining to see if a borrow is needed.
+    // Check whether this expense would cause a deficit.
     const targetRow = rows.find((r) => r.category_id === categoryId);
     const newRemaining = (targetRow?.remaining_minor ?? 0) - amount;
+
     if (newRemaining < 0) {
-      // Deficit prompt.
+      // Hold the expense in state and open the borrow sheet.
+      // Nothing is written to DB yet.
       setPendingExpense(exp);
       setBorrowAmount(Math.abs(newRemaining));
       setBorrowOpen(true);
+      setSaving(false);
       return;
     }
+
+    // No deficit — write the expense now and go home.
+    await db.putExpense(exp);
+    toast({ title: "Saved", description: `${formatMoney(amount, settings!.currency)} to ${categories.find((c) => c.id === categoryId)?.name ?? ""}` });
+    setSaving(false);
     void refresh();
     reset();
     go("home");
@@ -116,46 +121,50 @@ export function QuickAddExpense({ data }: QuickAddProps) {
     setNote("");
     setCategoryId(null);
     setDate(todayIso());
+    setPendingExpense(null);
+    setBorrowAmount(0);
   }
 
   async function handleChooseBorrow(source: BorrowSource, amount: number) {
-    setBorrowSource(source);
-    setBorrowAmount(amount);
-    if (!activePeriod || !categoryId) return;
-    // Apply the transfer.
-    let toCategoryId = categoryId;
+    if (!activePeriod || !categoryId || !pendingExpense) return;
+    setSaving(true);
     try {
+      // Write the expense and the transfer atomically (expense first, then transfer).
+      await db.putExpense(pendingExpense);
       if (source.kind === "category" && source.categoryId) {
         await saveTransfer({
           periodStart: activePeriod.start_date,
           fromKind: "category",
           fromCategoryId: source.categoryId,
-          toCategoryId,
+          toCategoryId: categoryId,
           amountMinor: amount,
           note: `Borrowed to cover overspend`,
         });
         toast({
-          title: "Borrowed from category",
-          description: `${formatMoney(amount, settings!.currency)} from ${source.categoryName ?? "category"}`,
+          title: "Saved & borrowed",
+          description: `${formatMoney(pendingExpense.amount_minor, settings!.currency)} logged · ${formatMoney(amount, settings!.currency)} transferred from ${source.categoryName ?? "category"}`,
         });
       } else if (source.kind === "savings") {
         await saveTransfer({
           periodStart: activePeriod.start_date,
           fromKind: "savings",
           fromCategoryId: null,
-          toCategoryId,
+          toCategoryId: categoryId,
           amountMinor: amount,
           note: `Borrowed to cover overspend`,
         });
         toast({
-          title: "Borrowed from savings",
-          description: `${formatMoney(amount, settings!.currency)} from savings pool`,
+          title: "Saved & borrowed",
+          description: `${formatMoney(pendingExpense.amount_minor, settings!.currency)} logged · ${formatMoney(amount, settings!.currency)} from savings pool`,
         });
       }
     } catch (e) {
-      toast({ title: "Borrow failed", description: (e as Error).message, variant: "destructive" });
+      toast({ title: "Failed to save", description: (e as Error).message, variant: "destructive" });
+      setSaving(false);
+      return;
     }
     setBorrowOpen(false);
+    setSaving(false);
     await refresh();
     reset();
     go("home");
@@ -246,7 +255,19 @@ export function QuickAddExpense({ data }: QuickAddProps) {
       </SheetContent>
       <BorrowSheet
         open={borrowOpen}
-        onOpenChange={setBorrowOpen}
+        onOpenChange={async (v) => {
+          if (!v && pendingExpense) {
+            // Sheet closed without a borrow choice — save the expense as-is.
+            await db.putExpense(pendingExpense);
+            toast({ title: "Saved", description: `${formatMoney(pendingExpense.amount_minor, settings!.currency)} to ${categories.find((c) => c.id === pendingExpense.category_id)?.name ?? ""}` });
+            setBorrowOpen(false);
+            await refresh();
+            reset();
+            go("home");
+          } else {
+            setBorrowOpen(v);
+          }
+        }}
         sources={sources}
         savingsBalanceMinor={savingsBalance}
         savingsCapRemainingMinor={capRemaining}
@@ -257,6 +278,11 @@ export function QuickAddExpense({ data }: QuickAddProps) {
         deficitCategoryName={categories.find((c) => c.id === categoryId)?.name ?? null}
         onChoose={handleChooseBorrow}
         onDismiss={async () => {
+          // User dismissed without borrowing — save the expense as-is (deficit accepted).
+          if (pendingExpense) {
+            await db.putExpense(pendingExpense);
+            toast({ title: "Saved", description: `${formatMoney(pendingExpense.amount_minor, settings!.currency)} to ${categories.find((c) => c.id === pendingExpense.category_id)?.name ?? ""}` });
+          }
           setBorrowOpen(false);
           await refresh();
           reset();

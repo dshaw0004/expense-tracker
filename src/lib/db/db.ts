@@ -261,6 +261,15 @@ export async function putSavingsEntry(entry: SavingsLedgerEntry): Promise<void> 
   await db.put("savings_ledger", entry);
 }
 
+// Delete all savings ledger entries that reference a given transfer_id.
+// Used when reverting a savings withdrawal transfer.
+export async function deleteSavingsEntriesByTransferId(transferId: string): Promise<void> {
+  const db = await getDB();
+  const all = await db.getAll("savings_ledger");
+  const toDelete = all.filter((e) => e.transfer_id === transferId);
+  await Promise.all(toDelete.map((e) => db.delete("savings_ledger", e.id)));
+}
+
 // --- Bulk reads (all entries) for export and global state ---------------------
 
 export async function getAllFromAllocations(): Promise<PeriodAllocation[]> {

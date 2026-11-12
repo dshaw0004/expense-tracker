@@ -11,11 +11,13 @@ import { computeEffectiveBudget, type EffectiveBudgetRow } from "@/lib/budget/pe
 import { computeSavingsBalance } from "@/lib/budget/savings";
 import { todayIso, daysLeftInPeriod, periodLengthDays, formatDisplayDate, addDays, nextPeriodStart } from "@/lib/budget/dates";
 import type { AppData } from "@/hooks/expense-tracker/useAppData";
-import { Plus, AlertTriangle, PiggyBank, ChevronRight, CalendarClock, History, Download, Receipt } from "lucide-react";
+import { Plus, AlertTriangle, PiggyBank, ChevronRight, CalendarClock, History, Download, Receipt, ArrowRightLeft } from "lucide-react";
 import { daysSinceExport } from "@/lib/budget/persistence";
 import { CategoryExpensesSheet } from "../shared/CategoryExpensesSheet";
 import { AllExpensesSheet } from "../shared/AllExpensesSheet";
+import { TransfersSheet } from "../shared/TransfersSheet";
 import * as db from "@/lib/db/db";
+import { revertTransfer } from "@/lib/budget/period";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +31,7 @@ export function Home({ data }: HomeProps) {
   const { settings, activePeriod, categories, pendingPeriods, savingsLedger } = data;
   const [inspectCategoryId, setInspectCategoryId] = useState<string | null>(null);
   const [showAllExpenses, setShowAllExpenses] = useState(false);
+  const [showTransfers, setShowTransfers] = useState(false);
 
   const { periodExpenses, periodTransfers, periodAllocations } = useActivePeriodFiltered(activePeriod, data);
 
@@ -187,6 +190,17 @@ export function Home({ data }: HomeProps) {
               <Receipt className="mr-1 h-3 w-3" />
               Transactions ({periodExpenses.length})
             </Button>
+            {periodTransfers.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowTransfers(true)}
+                className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                <ArrowRightLeft className="mr-1 h-3 w-3" />
+                Transfers ({periodTransfers.length})
+              </Button>
+            )}
           </div>
           <span className="text-xs text-muted-foreground">
             {daysLeft > 0 ? `${daysLeft} days left (${realDays}-day period)` : `Period ended · ${realDays} days`}
@@ -250,6 +264,19 @@ export function Home({ data }: HomeProps) {
         onDeleteExpense={async (id) => {
           await db.deleteExpense(id);
           toast({ title: "Expense deleted" });
+          await data.refresh();
+        }}
+      />
+
+      <TransfersSheet
+        open={showTransfers}
+        onOpenChange={setShowTransfers}
+        transfers={periodTransfers}
+        rows={rows}
+        currency={settings.currency}
+        onRevert={async (transfer) => {
+          await revertTransfer(transfer.id, transfer.from_kind);
+          toast({ title: "Transfer cancelled", description: `${transfer.amount_minor / 100} returned to ${transfer.from_kind === "savings" ? "savings pool" : "source envelope"}.` });
           await data.refresh();
         }}
       />

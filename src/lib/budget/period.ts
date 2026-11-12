@@ -554,3 +554,14 @@ export async function getClosedPeriods(): Promise<Period[]> {
     .filter((p) => p.status === "closed")
     .sort((a, b) => (a.start_date < b.start_date ? 1 : -1));
 }
+
+// === Revert a transfer ======================================================
+// Deletes the transfer record and, if it was a savings withdrawal, also removes
+// the corresponding savings ledger entry so the balance is restored.
+// This is an atomic two-delete operation (transfers + savings_ledger).
+export async function revertTransfer(transferId: string, fromKind: "category" | "savings"): Promise<void> {
+  await db.deleteTransfer(transferId);
+  if (fromKind === "savings") {
+    await db.deleteSavingsEntriesByTransferId(transferId);
+  }
+}
